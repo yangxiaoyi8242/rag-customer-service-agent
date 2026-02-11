@@ -1,0 +1,34 @@
+# 向量库文件
+vector_db/
+
+# 日志文件
+logs/
+
+# 资料文件
+审核后资料文件夹/
+
+# Python依赖
+__pycache__/
+*.pyc
+
+# IDE配置
+.vscode/
+.idea/
+
+# 环境变量文件
+.env
+.env.local
+
+# 操作系统文件
+Thumbs.db
+.DS_Store
+
+# 构建产物
+build/
+dist/
+*.egg-info/
+
+# 临时文件
+*.tmp
+*.temp
+.cache/

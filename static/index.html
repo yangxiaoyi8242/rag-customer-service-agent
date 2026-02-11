@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RAG客户问答系统</title>
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>小天元客户操作问答系统</h1>
+            <p>基于豆包LLM和审核后本地资料的智能问答</p>
+        </header>
+        
+        <main>
+            <section class="chat-section">
+                <div id="chat-container" class="chat-container">
+                    <!-- 聊天记录将在这里显示 -->
+                </div>
+                
+                <form id="query-form" class="query-form">
+                    <input type="text" id="query-input" placeholder="请输入您的问题..." required>
+                    <button type="submit">发送</button>
+                </form>
+            </section>
+            
+            <section class="upload-section">
+                <h2>资料管理</h2>
+                <form id="upload-form" class="upload-form">
+                    <input type="file" id="file-input" multiple>
+                    <button type="submit">上传文件</button>
+                </form>
+                <p id="upload-status"></p>
+            </section>
+            
+            <section class="status-section">
+                <h2>系统状态</h2>
+                <div id="status-info">
+                    <!-- 系统状态将在这里显示 -->
+                </div>
+            </section>
+        </main>
+        
+        <footer>
+            <p>&copy; 2026 RAG客户问答系统</p>
+        </footer>
+    </div>
+    
+    <script src="static/script.js"></script>
+</body>
+</html>

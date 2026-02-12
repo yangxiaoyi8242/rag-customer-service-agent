@@ -217,35 +217,49 @@ class RAGCore:
         prompt += "6. 对于多个功能或要点，使用换行符分隔，使回答更加清晰\n"
         
         try:
-            # 调用豆包API
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.doubao_api_key}"
-            }
+            # 调用豆包API，添加重试机制
+            import time
+            max_retries = 3
+            retry_delay = 2
             
-            data = {
-                "model": self.default_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "你是一个专业的客户服务助手，严格基于提供的资料回答问题。"
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
+            for attempt in range(max_retries):
+                try:
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.doubao_api_key}"
                     }
-                ],
-                "temperature": 0.1,
-                "max_tokens": 500
-            }
-            
-            response = requests.post(self.api_url, headers=headers, data=json.dumps(data, ensure_ascii=False), timeout=20)
-            response.raise_for_status()
-            
-            result = response.json()
-            answer = result["choices"][0]["message"]["content"]
-            
-            return {"type": "info", "message": answer}
+                    
+                    data = {
+                        "model": self.default_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "你是一个专业的客户服务助手，严格基于提供的资料回答问题。"
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": 0.1,
+                        "max_tokens": 500
+                    }
+                    
+                    response = requests.post(self.api_url, headers=headers, data=json.dumps(data, ensure_ascii=False), timeout=20)
+                    response.raise_for_status()
+                    
+                    result = response.json()
+                    answer = result["choices"][0]["message"]["content"]
+                    
+                    return {"type": "info", "message": answer}
+                    
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    if attempt < max_retries - 1:
+                        print(f"API调用失败，{retry_delay}秒后重试... (尝试 {attempt+1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        raise
             
         except Exception as e:
             import traceback
@@ -262,35 +276,49 @@ class RAGCore:
         prompt += "3. 不要提及任何关于资料的内容\n"
         
         try:
-            # 调用豆包API
-            headers = {
-                "Content-Type": "application/json",
-                "Authorization": f"Bearer {self.doubao_api_key}"
-            }
+            # 调用豆包API，添加重试机制
+            import time
+            max_retries = 3
+            retry_delay = 2
             
-            data = {
-                "model": self.default_model,
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "你是一个专业的客户服务助手，自由回答用户的问题。"
-                    },
-                    {
-                        "role": "user",
-                        "content": prompt
+            for attempt in range(max_retries):
+                try:
+                    headers = {
+                        "Content-Type": "application/json",
+                        "Authorization": f"Bearer {self.doubao_api_key}"
                     }
-                ],
-                "temperature": 0.7,
-                "max_tokens": 500
-            }
-            
-            response = requests.post(self.api_url, headers=headers, data=json.dumps(data), timeout=20)
-            response.raise_for_status()
-            
-            result = response.json()
-            answer = result["choices"][0]["message"]["content"]
-            
-            return {"type": "general", "message": answer}
+                    
+                    data = {
+                        "model": self.default_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "你是一个专业的客户服务助手，自由回答用户的问题。"
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 500
+                    }
+                    
+                    response = requests.post(self.api_url, headers=headers, data=json.dumps(data), timeout=20)
+                    response.raise_for_status()
+                    
+                    result = response.json()
+                    answer = result["choices"][0]["message"]["content"]
+                    
+                    return {"type": "general", "message": answer}
+                    
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                    if attempt < max_retries - 1:
+                        print(f"API调用失败，{retry_delay}秒后重试... (尝试 {attempt+1}/{max_retries})")
+                        time.sleep(retry_delay)
+                        continue
+                    else:
+                        raise
             
         except Exception as e:
             import traceback

@@ -19,33 +19,33 @@ class RAGTool:
         """
         self.rag_core = rag_core
     
-    def _run(self, query: str, **kwargs) -> str:
+    def _run(self, query: str, chat_history: str = "", **kwargs) -> str:
         """
         运行RAG工具
         
         Args:
             query: 用户查询
+            chat_history: 会话历史
             
         Returns:
             str: 回答内容
         """
         try:
-            answer, relevant_docs = self.rag_core.process_query(query)
+            # 构建完整的查询上下文
+            full_query = query
+            if chat_history:
+                # 将会话历史与当前查询结合
+                full_query = f"{chat_history}\n用户: {query}"
+            
+            answer, relevant_docs = self.rag_core.process_query(full_query)
             
             # 构建回答内容
             if answer.get("type") == "no_info":
                 return "抱歉，我无法回答这个问题，请转人工客服处理。"
             else:
-                # 添加参考资料信息
-                if relevant_docs:
-                    sources_info = "\n参考资料："
-                    for i, doc in enumerate(relevant_docs[:3]):
-                        source = doc.get("metadata", {}).get("source", "未知")
-                        content = doc.get("page_content", "").strip()[:100]
-                        sources_info += f"\n{i+1}. {source}: {content}..."
-                    return answer.get("message", "") + sources_info
-                else:
-                    return answer.get("message", "")
+                # 只返回纯粹的回答内容，不添加参考资料
+                # 参考资料由前端统一处理
+                return answer.get("message", "")
         except Exception as e:
             print(f"RAG工具执行失败: {e}")
             return "抱歉，系统暂时无法回答您的问题，请稍后再试。"
@@ -140,7 +140,7 @@ class AgentCore:
         
         # 直接使用RAG工具处理查询（简化实现）
         # 后续可以升级为完整的Agent流程
-        answer = self.rag_tool._run(query)
+        answer = self.rag_tool._run(query, chat_history=chat_history)
         
         # 添加消息到会话历史
         self.session_manager.add_message(session_id, "user", query)

@@ -51,20 +51,14 @@ class RAGCore:
         if not self.data_loader.vector_store:
             return []
         
-        print(f"\n=== 强制检索规则调试与强化 ===")
-        print(f"用户查询: {query}")
-        
         # 从查询中提取关键词并添加到关键词库
         extracted_keywords = self.extract_keywords(query)
-        print(f"从查询中提取的关键词: {extracted_keywords}")
         
         # 添加新关键词到关键词库
         if extracted_keywords:
             self.keyword_manager.add_keywords(extracted_keywords)
-            print(f"已将新关键词添加到关键词库")
         
         # 1. 强制检索规则（优先执行）
-        print("\n步骤1: 执行强制检索")
         mandatory_docs = []
         
         # 从关键词管理器获取触发关键词
@@ -72,11 +66,16 @@ class RAGCore:
         
         # 检查是否触发强制检索
         trigger_found = any(keyword in query for keyword in trigger_keywords)
-        print(f"触发关键词检查: {'已触发' if trigger_found else '未触发'}")
         
         if trigger_found:
-            print("强制检索包含相关内容的文档...")
+            # 限制强制检索的文档数量，提高性能
+            doc_count = 0
+            max_docs = 20  # 限制处理的文档数量
+            
             for doc in self.data_loader.documents:
+                if doc_count >= max_docs:
+                    break
+                    
                 content = doc["page_content"]
                 # 检查是否包含相关内容
                 content_has_relevant = False
@@ -94,16 +93,21 @@ class RAGCore:
                 if content_has_relevant:
                     doc["mandatory_score"] = 0.6  # 强制得分权重设为0.6
                     mandatory_docs.append(doc)
-                    print(f"强制添加文档: {doc['page_content'][:150]}...")
+                    doc_count += 1
         
         # 2. 关键词匹配
-        print("\n步骤2: 执行关键词匹配")
         # 从关键词管理器获取匹配关键词
         keywords = self.keyword_manager.get_keywords()
         keyword_matches = []
         
-        # 查找包含关键词的文档
+        # 查找包含关键词的文档，限制数量
+        doc_count = 0
+        max_docs = 15  # 限制处理的文档数量
+        
         for doc in self.data_loader.documents:
+            if doc_count >= max_docs:
+                break
+                
             content = doc["page_content"]
             match_count = 0
             for keyword in keywords:
@@ -115,14 +119,9 @@ class RAGCore:
                 # 计算关键词匹配得分
                 doc["keyword_score"] = match_count * 0.3  # 关键词匹配得分0.3
                 keyword_matches.append(doc)
-        
-        # 打印关键词匹配结果
-        print(f"找到 {len(keyword_matches)} 个包含关键词的文档")
-        for i, doc in enumerate(keyword_matches[:3]):
-            print(f"关键词匹配文档 {i+1}: {doc['page_content'][:100]}...")
+                doc_count += 1
         
         # 3. 向量相似度检索
-        print("\n步骤3: 执行向量相似度检索")
         # 计算查询向量
         query_embedding = self.data_loader.simple_embed(query)
         query_embedding = np.array([query_embedding]).astype('float32')
@@ -139,13 +138,7 @@ class RAGCore:
                 doc["similarity_score"] = (1.0 / (1.0 + doc["distance"])) * 0.1  # 向量相似度0.1
                 similarity_docs.append(doc)
         
-        # 打印相似度检索结果
-        print(f"检索到 {len(similarity_docs)} 个相似度文档")
-        for i, doc in enumerate(similarity_docs[:3]):
-            print(f"相似度文档 {i+1} 得分: {doc.get('similarity_score', 0):.4f}, 内容: {doc['page_content'][:100]}...")
-        
         # 4. 合并结果
-        print("\n步骤4: 合并结果")
         # 去重
         seen_content = set()
         unique_docs = []
@@ -172,7 +165,6 @@ class RAGCore:
                 unique_docs.append(doc)
         
         # 5. 排序
-        print("\n步骤5: 排序结果")
         # 优先按强制得分排序，然后按关键词匹配得分排序，最后按相似度排序
         def sort_key(doc):
             # 强制得分（默认0）
@@ -188,14 +180,6 @@ class RAGCore:
         # 保留前8个文档
         relevant_docs = unique_docs[:8]
         
-        # 打印最终结果
-        print(f"\n最终保留 {len(relevant_docs)} 个相关文档")
-        for i, doc in enumerate(relevant_docs):
-            mandatory_score = doc.get("mandatory_score", 0)
-            keyword_score = doc.get("keyword_score", 0)
-            similarity_score = doc.get("similarity_score", 0)
-            print(f"最终文档 {i+1} 得分: 强制={mandatory_score:.2f}, 关键词={keyword_score:.2f}, 相似度={similarity_score:.4f}, 内容: {doc['page_content'][:100]}...")
-        
         return relevant_docs
     
     def generate_answer(self, query, relevant_docs):
@@ -203,8 +187,25 @@ class RAGCore:
         if not relevant_docs:
             return {"type": "no_info", "message": "抱歉，我无法回答这个问题，请转人工客服处理。"}
         
-        # 构建提示词
-        context = "\n".join([doc["page_content"] for doc in relevant_docs])
+        # 构建提示词，限制文档内容长度
+        max_context_length = 1500  # 限制上下文长度
+        context_parts = []
+        current_length = 0
+        
+        for doc in relevant_docs:
+            doc_content = doc["page_content"]
+            # 只添加与查询相关的部分
+            if len(doc_content) > 200:
+                # 截取前200个字符，确保包含关键信息
+                doc_content = doc_content[:200] + "..."
+            
+            if current_length + len(doc_content) < max_context_length:
+                context_parts.append(doc_content)
+                current_length += len(doc_content)
+            else:
+                break
+        
+        context = "\n".join(context_parts)
         prompt = f"你是一个专业的客户服务助手，只能基于以下提供的资料回答问题，禁止使用资料外的信息：\n\n"
         prompt += f"资料：\n{context}\n\n"
         prompt += f"问题：{query}\n\n"
@@ -238,13 +239,7 @@ class RAGCore:
                 "max_tokens": 500
             }
             
-            print(f"调用豆包API: {self.api_url}")
-            print(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
-            
-            response = requests.post(self.api_url, headers=headers, data=json.dumps(data, ensure_ascii=False), timeout=30)
-            print(f"响应状态码: {response.status_code}")
-            print(f"响应内容: {response.text}")
-            
+            response = requests.post(self.api_url, headers=headers, data=json.dumps(data, ensure_ascii=False), timeout=20)
             response.raise_for_status()
             
             result = response.json()
@@ -253,10 +248,9 @@ class RAGCore:
             return {"type": "info", "message": answer}
             
         except Exception as e:
-            print(f"调用豆包API失败: {str(e)}")
             import traceback
             traceback.print_exc()
-            return {"type": "error", "message": f"抱歉，系统暂时无法回答您的问题，请稍后再试。错误信息: {str(e)}"}
+            return {"type": "error", "message": "抱歉，系统暂时无法回答您的问题，请稍后再试。"}
     
     def generate_general_answer(self, query):
         """调用豆包大模型自由回答问题"""
@@ -290,13 +284,7 @@ class RAGCore:
                 "max_tokens": 500
             }
             
-            print(f"调用豆包API: {self.api_url}")
-            print(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
-            
-            response = requests.post(self.api_url, headers=headers, data=json.dumps(data), timeout=30)
-            print(f"响应状态码: {response.status_code}")
-            print(f"响应内容: {response.text}")
-            
+            response = requests.post(self.api_url, headers=headers, data=json.dumps(data), timeout=20)
             response.raise_for_status()
             
             result = response.json()
@@ -305,10 +293,9 @@ class RAGCore:
             return {"type": "general", "message": answer}
             
         except Exception as e:
-            print(f"调用豆包API失败: {str(e)}")
             import traceback
             traceback.print_exc()
-            return {"type": "error", "message": f"抱歉，系统暂时无法回答您的问题，请稍后再试。错误信息: {str(e)}"}
+            return {"type": "error", "message": "抱歉，系统暂时无法回答您的问题，请稍后再试。"}
     
     def process_query(self, query):
         """处理用户查询的完整流程"""

@@ -4,6 +4,9 @@ from fastapi.responses import HTMLResponse
 import uvicorn
 import os
 import shutil
+import threading
+import numpy as np
+from concurrent.futures import ThreadPoolExecutor
 from data_loader import DataLoader
 from rag_core import RAGCore
 from log_handler import LogHandler
@@ -18,9 +21,14 @@ class WebServer:
         self.rag_core = RAGCore(self.data_loader, config["doubao_api_key"])
         self.log_handler = LogHandler(config["log_dir"])
         
+        # 初始化线程池
+        self.executor = ThreadPoolExecutor(max_workers=2)
+        self.rebuilding = False
+        
         # 加载向量库
         if not self.data_loader.load_vector_store():
-            self.data_loader.rebuild_vector_store()
+            # 在后台线程中重建向量库
+            self.executor.submit(self._rebuild_vector_store_background)
         
         # 注册路由
         self._register_routes()
@@ -28,6 +36,22 @@ class WebServer:
         # 挂载静态文件
         if os.path.exists("static"):
             self.app.mount("/static", StaticFiles(directory="static"), name="static")
+    
+    def _rebuild_vector_store_background(self):
+        """在后台线程中重建向量库"""
+        if self.rebuilding:
+            print("向量库重建已在进行中，跳过")
+            return
+        
+        print("开始后台重建向量库...")
+        self.rebuilding = True
+        try:
+            self.data_loader.rebuild_vector_store()
+            print("后台向量库重建完成")
+        except Exception as e:
+            print(f"后台向量库重建失败: {str(e)}")
+        finally:
+            self.rebuilding = False
     
     def _register_routes(self):
         @self.app.get("/", response_class=HTMLResponse)
@@ -38,30 +62,63 @@ class WebServer:
         @self.app.post("/api/query")
         async def query(text: str = Form(...)):
             try:
+                # 调试信息
+                print(f"接收到查询请求: {text}")
+                
                 # 检查资料更新
                 if self.data_loader.check_for_changes():
-                    self.data_loader.rebuild_vector_store()
+                    # 在后台线程中重建向量库
+                    self.executor.submit(self._rebuild_vector_store_background)
+                    # 立即返回，不等待重建完成
+                    # 注意：此时返回的可能是基于旧向量库的结果
                 
                 # 处理查询
                 answer, relevant_docs = self.rag_core.process_query(text)
                 
                 # 记录日志
-                self.log_handler.log_chat(text, answer, relevant_docs)
+                # 暂时注释掉日志记录，避免处理relevant_docs
+                # self.log_handler.log_chat(text, answer, relevant_docs)
                 
-                # 准备检索片段
+                # 调试信息
+                print(f"Answer: {answer}")
+                print(f"Relevant docs count: {len(relevant_docs)}")
+                
+                # 准备检索片段，确保不包含numpy类型
                 sources = []
                 for doc in relevant_docs:
-                    sources.append({
-                        "source": doc["metadata"]["source"],
-                        "content": doc["page_content"],
-                        "distance": doc.get("distance", "N/A")
-                    })
+                    source_item = {
+                        "source": str(doc["metadata"]["source"]),
+                        "content": str(doc["page_content"]),
+                        "distance": "N/A"
+                    }
+                    sources.append(source_item)
                 
                 return {
                     "answer": answer,
-                    "sources": sources
+                    "sources": sources,
+                    "rebuilding": self.rebuilding
                 }
             except Exception as e:
+                print(f"Error: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/general_query")
+        async def general_query(text: str = Form(...)):
+            try:
+                # 调试信息
+                print(f"接收到通用查询请求: {text}")
+                
+                # 处理通用查询，调用豆包大模型自由回答
+                answer = self.rag_core.process_general_query(text)
+                
+                # 调试信息
+                print(f"General answer: {answer}")
+                
+                return {
+                    "answer": answer
+                }
+            except Exception as e:
+                print(f"Error: {str(e)}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.post("/api/upload")
@@ -72,10 +129,10 @@ class WebServer:
                 with open(file_path, "wb") as buffer:
                     shutil.copyfileobj(file.file, buffer)
                 
-                # 重建向量库
-                self.data_loader.rebuild_vector_store()
+                # 在后台线程中重建向量库
+                self.executor.submit(self._rebuild_vector_store_background)
                 
-                return {"message": "文件上传成功，向量库已更新"}
+                return {"message": "文件上传成功，向量库正在后台更新"}
             except Exception as e:
                 raise HTTPException(status_code=500, detail=str(e))
         
@@ -84,7 +141,8 @@ class WebServer:
             return {
                 "vector_store_status": "loaded" if self.data_loader.vector_store else "not loaded",
                 "document_count": len(self.data_loader.documents),
-                "data_dir": self.config["data_dir"]
+                "data_dir": self.config["data_dir"],
+                "rebuilding": self.rebuilding
             }
     
     def run(self, host="0.0.0.0", port=8000):

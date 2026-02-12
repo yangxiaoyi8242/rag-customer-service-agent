@@ -3,6 +3,8 @@ import glob
 import faiss
 import numpy as np
 import hashlib
+import psutil
+import gc
 from docx import Document
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
@@ -15,15 +17,61 @@ class DataLoader:
         self.documents = []
         self.file_hashes = {}
         self.vector_dim = 128  # 固定向量维度
+        self.max_memory_usage = 0.8  # 最大内存使用比例 (80%)
     
-    def split_single_text(self, text, chunk_size=500, chunk_overlap=50):
-        """简单的文本切分功能（优化版本）"""
+    def _check_memory_usage(self):
+        """检查当前内存使用情况"""
+        process = psutil.Process(os.getpid())
+        memory_info = process.memory_info()
+        memory_percent = process.memory_percent()
+        
+        print(f"当前内存使用: {memory_info.rss / 1024 / 1024:.2f} MB ({memory_percent:.2f}%)")
+        
+        # 检查是否超过内存限制
+        if memory_percent > self.max_memory_usage * 100:
+            print("警告：内存使用超过限制，正在清理内存...")
+            # 强制垃圾回收
+            gc.collect()
+            # 再次检查内存使用
+            memory_percent = process.memory_percent()
+            print(f"清理后内存使用: {memory_percent:.2f}%")
+            return False
+        
+        return True
+    
+    def split_single_text(self, text, chunk_size=400, chunk_overlap=50):
+        """优化的文本切分功能，确保操作步骤完整包含在一个文档块内"""
         print(f"开始切分文本，长度: {len(text)} 字符")
         chunks = []
         start = 0
         text_length = len(text)
         max_iterations = (text_length + chunk_size - 1) // (chunk_size - chunk_overlap) + 10
         iteration_count = 0
+        
+        # 特殊处理：检测并单独分块操作步骤
+        operation_keywords = ["登录企业手机银行", "进入费控商旅", "点击出差申请", "新建出差申请单"]
+        
+        # 检查是否包含操作步骤
+        contains_operation = any(keyword in text for keyword in operation_keywords)
+        
+        if contains_operation:
+            print("检测到操作步骤，使用特殊分块策略")
+            # 尝试找到操作步骤的完整范围
+            operation_start = text.find(operation_keywords[0])
+            if operation_start != -1:
+                # 向后查找操作步骤的结束位置
+                operation_end = text.find("。", operation_start + 100)
+                if operation_end == -1:
+                    operation_end = text.find("\n", operation_start + 100)
+                if operation_end == -1:
+                    operation_end = min(operation_start + 300, text_length)
+                
+                # 提取操作步骤块
+                operation_chunk = text[operation_start:operation_end].strip()
+                if operation_chunk:
+                    chunks.append(operation_chunk)
+                    print(f"提取操作步骤块: {operation_chunk[:150]}...")
+                    start = operation_end
         
         while start < text_length and iteration_count < max_iterations:
             iteration_count += 1
@@ -79,18 +127,28 @@ class DataLoader:
     
     def load_files(self):
         """加载指定目录下的所有文件"""
+        print("开始加载文件...")
+        self._check_memory_usage()
+        
         files = glob.glob(os.path.join(self.data_dir, "**/*"), recursive=True)
         valid_files = []
         
         for file_path in files:
             if os.path.isfile(file_path):
                 try:
+                    # 检查内存使用
+                    if not self._check_memory_usage():
+                        print(f"内存不足，跳过文件: {file_path}")
+                        continue
+                    
                     content = self._read_file(file_path)
                     if content:
                         valid_files.append((file_path, content))
                 except Exception as e:
                     print(f"无法读取文件 {file_path}: {str(e)}")
         
+        print(f"文件加载完成，共加载 {len(valid_files)} 个有效文件")
+        self._check_memory_usage()
         return valid_files
     
     def _read_file(self, file_path):
@@ -192,6 +250,7 @@ class DataLoader:
     def compute_embeddings(self, documents):
         """计算文本嵌入向量"""
         print(f"开始计算 {len(documents)} 个文档的嵌入向量")
+        self._check_memory_usage()
         
         embeddings = []
         batch_size = 50  # 批处理大小
@@ -199,6 +258,11 @@ class DataLoader:
         
         # 分批处理
         for batch_idx in range(total_batches):
+            # 检查内存使用
+            if not self._check_memory_usage():
+                print(f"内存不足，减少批次大小")
+                batch_size = max(10, batch_size // 2)  # 减少批次大小
+            
             start_idx = batch_idx * batch_size
             end_idx = min((batch_idx + 1) * batch_size, len(documents))
             batch_docs = documents[start_idx:end_idx]
@@ -210,8 +274,15 @@ class DataLoader:
                 text = doc["page_content"]
                 embedding = self.simple_embed(text)
                 embeddings.append(embedding)
+            
+            # 每处理完一个批次，清理一次内存
+            if (batch_idx + 1) % 5 == 0:
+                print("清理内存...")
+                gc.collect()
+                self._check_memory_usage()
         
         print(f"嵌入向量计算完成，共生成 {len(embeddings)} 个向量")
+        self._check_memory_usage()
         return np.array(embeddings).astype('float32')
     
     def build_vector_store(self, documents, embeddings):
@@ -243,6 +314,14 @@ class DataLoader:
         # 保存向量库和文档
         print(f"保存向量库到: {self.vector_db_path}")
         faiss.write_index(index, self.vector_db_path)
+        
+        # 保存文档信息到磁盘
+        import pickle
+        docs_path = self.vector_db_path.replace('.bin', '_docs.pkl')
+        print(f"保存文档信息到: {docs_path}")
+        with open(docs_path, 'wb') as f:
+            pickle.dump(documents, f)
+        
         self.vector_store = index
         self.documents = documents
         
@@ -255,9 +334,21 @@ class DataLoader:
         if os.path.exists(self.vector_db_path):
             try:
                 self.vector_store = faiss.read_index(self.vector_db_path)
-                # 重新加载文档（实际应用中可能需要更高效的存储方式）
-                files = self.load_files()
-                self.documents = self.split_text(files)
+                
+                # 尝试从磁盘加载文档信息
+                import pickle
+                docs_path = self.vector_db_path.replace('.bin', '_docs.pkl')
+                if os.path.exists(docs_path):
+                    print(f"从磁盘加载文档信息: {docs_path}")
+                    with open(docs_path, 'rb') as f:
+                        self.documents = pickle.load(f)
+                    print(f"成功加载 {len(self.documents)} 个文档")
+                else:
+                    # 如果没有保存的文档信息，再重新加载
+                    print("没有找到保存的文档信息，重新加载文件...")
+                    files = self.load_files()
+                    self.documents = self.split_text(files)
+                
                 self._update_file_hashes()
                 return True
             except Exception as e:
@@ -265,39 +356,71 @@ class DataLoader:
                 return False
         return False
     
+    def _calculate_file_hash(self, file_path, block_size=8192):
+        """使用流式读取计算文件哈希值"""
+        hasher = hashlib.md5()
+        try:
+            with open(file_path, 'rb') as f:
+                while True:
+                    data = f.read(block_size)
+                    if not data:
+                        break
+                    hasher.update(data)
+            return hasher.hexdigest()
+        except Exception as e:
+            print(f"计算文件哈希失败 {file_path}: {str(e)}")
+            return None
+    
     def _update_file_hashes(self):
         """更新文件哈希值，用于检测文件变更"""
         files = glob.glob(os.path.join(self.data_dir, "**/*"), recursive=True)
         for file_path in files:
             if os.path.isfile(file_path):
                 try:
-                    with open(file_path, 'rb') as f:
-                        file_hash = hashlib.md5(f.read()).hexdigest()
-                    self.file_hashes[file_path] = file_hash
+                    # 获取文件的修改时间和大小作为初步标识
+                    file_stat = os.stat(file_path)
+                    file_info = {
+                        'mtime': file_stat.st_mtime,
+                        'size': file_stat.st_size,
+                        'hash': self._calculate_file_hash(file_path)
+                    }
+                    self.file_hashes[file_path] = file_info
                 except Exception as e:
-                    print(f"计算文件哈希失败 {file_path}: {str(e)}")
+                    print(f"更新文件信息失败 {file_path}: {str(e)}")
     
     def check_for_changes(self):
         """检查是否有文件变更"""
-        current_hashes = {}
         files = glob.glob(os.path.join(self.data_dir, "**/*"), recursive=True)
+        current_files = set()
         
         # 检查新增或修改的文件
         for file_path in files:
             if os.path.isfile(file_path):
+                current_files.add(file_path)
                 try:
-                    with open(file_path, 'rb') as f:
-                        file_hash = hashlib.md5(f.read()).hexdigest()
-                    current_hashes[file_path] = file_hash
+                    # 获取文件的修改时间和大小
+                    file_stat = os.stat(file_path)
+                    current_mtime = file_stat.st_mtime
+                    current_size = file_stat.st_size
                     
-                    if file_path not in self.file_hashes or self.file_hashes[file_path] != file_hash:
+                    # 检查文件是否存在于记录中
+                    if file_path not in self.file_hashes:
+                        print(f"检测到新增文件: {file_path}")
                         return True
+                    
+                    # 首先使用修改时间和大小进行初步检测
+                    stored_info = self.file_hashes[file_path]
+                    if stored_info['mtime'] != current_mtime or stored_info['size'] != current_size:
+                        print(f"检测到文件变更: {file_path}")
+                        return True
+                        
                 except Exception as e:
                     print(f"检查文件变更失败 {file_path}: {str(e)}")
         
         # 检查删除的文件
         for file_path in self.file_hashes:
-            if not os.path.exists(file_path):
+            if file_path not in current_files:
+                print(f"检测到文件删除: {file_path}")
                 return True
         
         return False

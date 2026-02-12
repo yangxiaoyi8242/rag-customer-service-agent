@@ -1,6 +1,8 @@
 import requests
 import json
 import numpy as np
+from keyword_manager import KeywordManager
+import jieba
 
 class RAGCore:
     def __init__(self, data_loader, doubao_api_key):
@@ -8,6 +10,41 @@ class RAGCore:
         self.doubao_api_key = doubao_api_key
         self.api_url = "https://ark.cn-beijing.volces.com/api/v3/chat/completions"
         self.default_model = "doubao-seed-1-6-251015"
+        self.keyword_manager = KeywordManager()
+        # 初始化jieba分词
+        self._init_jieba()
+    
+    def _init_jieba(self):
+        """初始化jieba分词"""
+        # 加载自定义词典
+        # 这里可以添加行业特定词汇
+        pass
+    
+    def extract_keywords(self, text, top_n=5):
+        """从文本中提取关键词"""
+        # 使用jieba分词
+        words = jieba.cut(text)
+        
+        # 过滤停用词
+        stop_words = {
+            "怎么", "如何", "怎么", "怎样", "如何", "能否", "是否", 
+            "可以", "能不能", "有没有", "有吗", "吗", "的", "了", "在", 
+            "是", "我", "有", "和", "就", "不", "人", "都", "一", "一个", 
+            "上", "也", "很", "到", "说", "要", "去", "你", "会", "着", 
+            "没有", "看", "好", "自己", "这"
+        }
+        
+        # 计算词频
+        word_freq = {}
+        for word in words:
+            if word not in stop_words and len(word) > 1:
+                word_freq[word] = word_freq.get(word, 0) + 1
+        
+        # 按词频排序
+        sorted_words = sorted(word_freq.items(), key=lambda x: x[1], reverse=True)
+        
+        # 返回前top_n个关键词
+        return [word for word, _ in sorted_words[:top_n]]
     
     def retrieve_relevant_docs(self, query, top_k=8):
         """检索与查询相关的文档"""
@@ -17,29 +54,52 @@ class RAGCore:
         print(f"\n=== 强制检索规则调试与强化 ===")
         print(f"用户查询: {query}")
         
+        # 从查询中提取关键词并添加到关键词库
+        extracted_keywords = self.extract_keywords(query)
+        print(f"从查询中提取的关键词: {extracted_keywords}")
+        
+        # 添加新关键词到关键词库
+        if extracted_keywords:
+            self.keyword_manager.add_keywords(extracted_keywords)
+            print(f"已将新关键词添加到关键词库")
+        
         # 1. 强制检索规则（优先执行）
         print("\n步骤1: 执行强制检索")
         mandatory_docs = []
         
-        # 扩充触发关键词
-        trigger_keywords = ["出差申请", "提交", "出差申请单", "新建出差申请", "申请出差"]
+        # 从关键词管理器获取触发关键词
+        trigger_keywords = self.keyword_manager.get_keywords()
         
         # 检查是否触发强制检索
         trigger_found = any(keyword in query for keyword in trigger_keywords)
         print(f"触发关键词检查: {'已触发' if trigger_found else '未触发'}")
         
         if trigger_found:
-            print("强制检索包含'登录企业手机银行'相关内容的文档...")
+            print("强制检索包含相关内容的文档...")
             for doc in self.data_loader.documents:
                 content = doc["page_content"]
+                # 检查是否包含相关内容
+                content_has_relevant = False
+                
+                # 检查是否包含登录企业手机银行相关内容
                 if "登录企业手机银行" in content and "进入费控商旅" in content:
+                    content_has_relevant = True
+                
+                # 检查是否包含关键词库中的关键词
+                for keyword in trigger_keywords:
+                    if keyword in content:
+                        content_has_relevant = True
+                        break
+                
+                if content_has_relevant:
                     doc["mandatory_score"] = 0.6  # 强制得分权重设为0.6
                     mandatory_docs.append(doc)
                     print(f"强制添加文档: {doc['page_content'][:150]}...")
         
         # 2. 关键词匹配
         print("\n步骤2: 执行关键词匹配")
-        keywords = ["出差申请", "提交", "登录", "企业手机银行", "费控商旅", "新建", "申请单", "出差申请单", "新建出差申请", "申请出差"]
+        # 从关键词管理器获取匹配关键词
+        keywords = self.keyword_manager.get_keywords()
         keyword_matches = []
         
         # 查找包含关键词的文档
@@ -49,6 +109,8 @@ class RAGCore:
             for keyword in keywords:
                 if keyword in content:
                     match_count += 1
+                    # 更新关键词权重
+                    self.keyword_manager.update_weight(keyword)
             if match_count > 0:
                 # 计算关键词匹配得分
                 doc["keyword_score"] = match_count * 0.3  # 关键词匹配得分0.3
@@ -150,6 +212,8 @@ class RAGCore:
         prompt += "2. 用简洁明了的语言回答\n"
         prompt += "3. 如果资料中没有相关信息，直接回答'抱歉，我无法回答这个问题，请转人工客服处理。'\n"
         prompt += "4. 不要提及'根据资料'、'资料显示'等引导性短语，直接给出答案\n"
+        prompt += "5. 对于操作步骤，使用换行符分隔每个步骤，提高可读性\n"
+        prompt += "6. 对于多个功能或要点，使用换行符分隔，使回答更加清晰\n"
         
         try:
             # 调用豆包API
@@ -177,7 +241,7 @@ class RAGCore:
             print(f"调用豆包API: {self.api_url}")
             print(f"请求数据: {json.dumps(data, ensure_ascii=False)}")
             
-            response = requests.post(self.api_url, headers=headers, data=json.dumps(data), timeout=30)
+            response = requests.post(self.api_url, headers=headers, data=json.dumps(data, ensure_ascii=False), timeout=30)
             print(f"响应状态码: {response.status_code}")
             print(f"响应内容: {response.text}")
             
@@ -258,10 +322,23 @@ class RAGCore:
         if len(relevant_docs) == 0 or answer.get("message") == "抱歉，我无法回答这个问题，请转人工客服处理。":
             answer = {"type": "no_info", "message": "抱歉，我无法回答这个问题，请转人工客服处理。"}
         
+        # 更新查询中关键词的权重
+        extracted_keywords = self.extract_keywords(query)
+        for keyword in extracted_keywords:
+            self.keyword_manager.update_weight(keyword)
+        
         return answer, relevant_docs
     
     def process_general_query(self, query):
         """处理通用查询，调用豆包大模型自由回答"""
+        # 提取关键词并添加到关键词库
+        extracted_keywords = self.extract_keywords(query)
+        if extracted_keywords:
+            self.keyword_manager.add_keywords(extracted_keywords)
+            # 更新关键词权重
+            for keyword in extracted_keywords:
+                self.keyword_manager.update_weight(keyword)
+        
         # 生成通用回答
         answer = self.generate_general_answer(query)
         

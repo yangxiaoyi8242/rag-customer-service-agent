@@ -10,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from data_loader import DataLoader
 from rag_core import RAGCore
 from log_handler import LogHandler
+from agent_core import AgentCore
 
 class WebServer:
     def __init__(self, config):
@@ -19,6 +20,7 @@ class WebServer:
         # 初始化核心模块
         self.data_loader = DataLoader(config["data_dir"], config["vector_db_path"])
         self.rag_core = RAGCore(self.data_loader, config["doubao_api_key"])
+        self.agent_core = AgentCore(self.rag_core, config["doubao_api_key"])
         self.log_handler = LogHandler(config["log_dir"])
         
         # 初始化线程池
@@ -60,10 +62,10 @@ class WebServer:
                 return f.read()
         
         @self.app.post("/api/query")
-        async def query(text: str = Form(...)):
+        async def query(text: str = Form(...), session_id: str = Form(None)):
             try:
                 # 调试信息
-                print(f"接收到查询请求: {text}")
+                print(f"接收到查询请求: {text}, session_id: {session_id}")
                 
                 # 检查资料更新
                 if self.data_loader.check_for_changes():
@@ -72,8 +74,16 @@ class WebServer:
                     # 立即返回，不等待重建完成
                     # 注意：此时返回的可能是基于旧向量库的结果
                 
-                # 处理查询
-                answer, relevant_docs = self.rag_core.process_query(text)
+                # 使用Agent处理查询
+                result = self.agent_core.process_query(text, session_id)
+                answer = result.get("answer")
+                session_id = result.get("session_id")
+                
+                # 处理relevant_docs
+                relevant_docs = []
+                if answer.get("type") != "no_info":
+                    # 重新获取相关文档
+                    _, relevant_docs = self.rag_core.process_query(text)
                 
                 # 记录日志
                 # 暂时注释掉日志记录，避免处理relevant_docs
@@ -81,6 +91,7 @@ class WebServer:
                 
                 # 调试信息
                 print(f"Answer: {answer}")
+                print(f"Session ID: {session_id}")
                 print(f"Relevant docs count: {len(relevant_docs)}")
                 
                 # 准备检索片段，确保不包含numpy类型
@@ -96,10 +107,39 @@ class WebServer:
                 return {
                     "answer": answer,
                     "sources": sources,
-                    "rebuilding": self.rebuilding
+                    "rebuilding": self.rebuilding,
+                    "session_id": session_id
                 }
             except Exception as e:
                 print(f"Error: {str(e)}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.post("/api/session")
+        async def create_session():
+            """创建新会话"""
+            try:
+                session_id = self.agent_core.create_session()
+                print(f"创建新会话: {session_id}")
+                return {
+                    "session_id": session_id,
+                    "session_count": self.agent_core.get_session_count()
+                }
+            except Exception as e:
+                print(f"创建会话失败: {e}")
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        @self.app.delete("/api/session/{session_id}")
+        async def delete_session(session_id: str):
+            """删除会话"""
+            try:
+                success = self.agent_core.delete_session(session_id)
+                print(f"删除会话: {session_id}, 结果: {success}")
+                return {
+                    "success": success,
+                    "session_count": self.agent_core.get_session_count()
+                }
+            except Exception as e:
+                print(f"删除会话失败: {e}")
                 raise HTTPException(status_code=500, detail=str(e))
         
         @self.app.post("/api/general_query")

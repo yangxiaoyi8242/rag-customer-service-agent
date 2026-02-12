@@ -2,6 +2,13 @@ document.addEventListener('DOMContentLoaded', function() {
     // 加载系统状态
     loadStatus();
     
+    // 会话ID管理
+    let sessionId = localStorage.getItem('sessionId');
+    if (!sessionId) {
+        // 创建新会话
+        createSession();
+    }
+    
     // 绑定查询表单提交事件
     document.getElementById('query-form').addEventListener('submit', async function(e) {
         e.preventDefault();
@@ -19,11 +26,56 @@ document.addEventListener('DOMContentLoaded', function() {
         input.value = '';
         
         // 显示加载状态
-        const loadingElement = document.createElement('div');
-        loadingElement.className = 'loading';
-        loadingElement.id = 'loading-indicator';
-        chatContainer.appendChild(loadingElement);
+        const loadingContainer = document.createElement('div');
+        loadingContainer.className = 'loading-container';
+        loadingContainer.id = 'loading-indicator';
+        
+        const loadingBar = document.createElement('div');
+        loadingBar.className = 'loading-bar';
+        
+        const loadingProgress = document.createElement('div');
+        loadingProgress.className = 'loading-progress';
+        loadingProgress.style.width = '0%';
+        
+        const loadingText = document.createElement('div');
+        loadingText.className = 'loading-text';
+        loadingText.textContent = '正在处理您的请求... 0%';
+        
+        loadingBar.appendChild(loadingProgress);
+        loadingContainer.appendChild(loadingBar);
+        loadingContainer.appendChild(loadingText);
+        
+        chatContainer.appendChild(loadingContainer);
         chatContainer.scrollTop = chatContainer.scrollHeight;
+        
+        // 模拟进度更新
+        let progress = 0;
+        let stage = 1; // 1: 1-90%, 2: 90-99%, 3: 完成
+        
+        const progressInterval = setInterval(() => {
+            if (stage === 1) {
+                // 1-90% 较慢
+                progress += 2;
+                if (progress >= 90) {
+                    progress = 90;
+                    stage = 2;
+                }
+            } else if (stage === 2) {
+                // 90-99% 更慢
+                progress += 0.5;
+                if (progress >= 99) {
+                    progress = 99;
+                }
+            }
+            
+            if (progress < 100) {
+                loadingProgress.style.width = `${progress}%`;
+                loadingText.textContent = `正在处理您的请求... ${Math.floor(progress)}%`;
+            }
+        }, 150);
+        
+        // 保存进度更新的引用
+        window.loadingProgressInterval = progressInterval;
         
         try {
             // 发送查询
@@ -33,7 +85,8 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Content-Type': 'application/x-www-form-urlencoded',
                 },
                 body: new URLSearchParams({
-                    'text': query
+                    'text': query,
+                    'session_id': sessionId
                 })
             });
             
@@ -43,14 +96,42 @@ document.addEventListener('DOMContentLoaded', function() {
             
             const data = await response.json();
             
-            // 移除加载状态
-            document.getElementById('loading-indicator').remove();
+            // 保存会话ID
+            if (data.session_id) {
+                sessionId = data.session_id;
+                localStorage.setItem('sessionId', sessionId);
+            }
+            
+            // 清除进度更新定时器
+            clearInterval(window.loadingProgressInterval);
+            
+            // 更新为100%
+            const loadingIndicator = document.getElementById('loading-indicator');
+            if (loadingIndicator) {
+                const loadingProgress = loadingIndicator.querySelector('.loading-progress');
+                const loadingText = loadingIndicator.querySelector('.loading-text');
+                if (loadingProgress && loadingText) {
+                    loadingProgress.style.width = '100%';
+                    loadingText.textContent = '处理完成！ 100%';
+                }
+                
+                // 延迟移除加载状态
+                setTimeout(() => {
+                    loadingIndicator.remove();
+                }, 500);
+            }
             
             // 添加机器人回复
             addMessage('bot', data.answer, data.sources);
         } catch (error) {
+            // 清除进度更新定时器
+            clearInterval(window.loadingProgressInterval);
+            
             // 移除加载状态
-            document.getElementById('loading-indicator').remove();
+            const loadingIndicator = document.getElementById('loading-indicator');
+            if (loadingIndicator) {
+                loadingIndicator.remove();
+            }
             
             // 显示错误消息
             addMessage('bot', '抱歉，处理您的请求时出错，请稍后重试。');
@@ -118,11 +199,15 @@ document.addEventListener('DOMContentLoaded', function() {
         contentDiv.className = 'message-content';
         
         // 处理不同类型的回答
+        let messageText = '';
         if (typeof content === 'object') {
-            contentDiv.textContent = content.message;
+            messageText = content.message;
         } else {
-            contentDiv.textContent = content;
+            messageText = content;
         }
+        
+        // 处理分段显示
+        contentDiv.innerHTML = messageText.replace(/\n/g, '<br>');
         
         messageDiv.appendChild(contentDiv);
         
@@ -212,12 +297,57 @@ document.addEventListener('DOMContentLoaded', function() {
         const chatContainer = document.getElementById('chat-container');
         
         // 显示加载状态
-        const loadingElement = document.createElement('div');
-        loadingElement.className = 'loading';
-        loadingElement.id = 'loading-indicator';
-        chatContainer.appendChild(loadingElement);
+        const loadingContainer = document.createElement('div');
+        loadingContainer.className = 'loading-container';
+        loadingContainer.id = 'loading-indicator';
+        
+        const loadingBar = document.createElement('div');
+        loadingBar.className = 'loading-bar';
+        
+        const loadingProgress = document.createElement('div');
+        loadingProgress.className = 'loading-progress';
+        loadingProgress.style.width = '0%';
+        
+        const loadingText = document.createElement('div');
+        loadingText.className = 'loading-text';
+        loadingText.textContent = '正在处理您的请求... 0%';
+        
+        loadingBar.appendChild(loadingProgress);
+        loadingContainer.appendChild(loadingBar);
+        loadingContainer.appendChild(loadingText);
+        
+        chatContainer.appendChild(loadingContainer);
         chatContainer.scrollTop = chatContainer.scrollHeight;
         console.log('加载状态已显示');
+        
+        // 模拟进度更新
+        let progress = 0;
+        let stage = 1; // 1: 1-90%, 2: 90-99%, 3: 完成
+        
+        const progressInterval = setInterval(() => {
+            if (stage === 1) {
+                // 1-90% 较慢
+                progress += 2;
+                if (progress >= 90) {
+                    progress = 90;
+                    stage = 2;
+                }
+            } else if (stage === 2) {
+                // 90-99% 更慢
+                progress += 0.5;
+                if (progress >= 99) {
+                    progress = 99;
+                }
+            }
+            
+            if (progress < 100) {
+                loadingProgress.style.width = `${progress}%`;
+                loadingText.textContent = `正在处理您的请求... ${Math.floor(progress)}%`;
+            }
+        }, 150);
+        
+        // 保存进度更新的引用
+        window.loadingProgressInterval = progressInterval;
         
         try {
             // 发送通用查询
@@ -240,8 +370,24 @@ document.addEventListener('DOMContentLoaded', function() {
             const data = await response.json();
             console.log('响应数据:', data);
             
-            // 移除加载状态
-            document.getElementById('loading-indicator').remove();
+            // 清除进度更新定时器
+            clearInterval(window.loadingProgressInterval);
+            
+            // 更新为100%
+            const loadingIndicator = document.getElementById('loading-indicator');
+            if (loadingIndicator) {
+                const loadingProgress = loadingIndicator.querySelector('.loading-progress');
+                const loadingText = loadingIndicator.querySelector('.loading-text');
+                if (loadingProgress && loadingText) {
+                    loadingProgress.style.width = '100%';
+                    loadingText.textContent = '处理完成！ 100%';
+                }
+                
+                // 延迟移除加载状态
+                setTimeout(() => {
+                    loadingIndicator.remove();
+                }, 500);
+            }
             console.log('加载状态已移除');
             
             // 添加通用查询的回答
@@ -249,8 +395,14 @@ document.addEventListener('DOMContentLoaded', function() {
             addGeneralMessage(data.answer);
             console.log('通用查询回答已添加');
         } catch (error) {
+            // 清除进度更新定时器
+            clearInterval(window.loadingProgressInterval);
+            
             // 移除加载状态
-            document.getElementById('loading-indicator').remove();
+            const loadingIndicator = document.getElementById('loading-indicator');
+            if (loadingIndicator) {
+                loadingIndicator.remove();
+            }
             console.log('加载状态已移除（错误情况）');
             
             // 显示错误消息
@@ -268,7 +420,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // 添加消息内容
         const contentDiv = document.createElement('div');
         contentDiv.className = 'message-content';
-        contentDiv.textContent = content.message;
+        contentDiv.innerHTML = content.message.replace(/\n/g, '<br>');
         messageDiv.appendChild(contentDiv);
         
         // 添加来源信息
@@ -299,6 +451,29 @@ document.addEventListener('DOMContentLoaded', function() {
             `;
         } catch (error) {
             console.error('加载状态失败:', error);
+        }
+    }
+    
+    // 创建新会话
+    async function createSession() {
+        try {
+            const response = await fetch('/api/session', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                }
+            });
+            
+            if (!response.ok) {
+                throw new Error('创建会话失败');
+            }
+            
+            const data = await response.json();
+            sessionId = data.session_id;
+            localStorage.setItem('sessionId', sessionId);
+            console.log('创建新会话:', sessionId);
+        } catch (error) {
+            console.error('创建会话失败:', error);
         }
     }
 });

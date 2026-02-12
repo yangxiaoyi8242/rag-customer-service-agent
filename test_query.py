@@ -1,28 +1,20 @@
 import requests
+import sys
 
-def test_query():
-    """测试系统对出差申请问题的回答"""
-    url = "http://localhost:8000/api/query"
-    data = {
-        "text": "我怎么进行 出差申请？"
-    }
-    
-    try:
-        response = requests.post(url, data=data)
-        response.raise_for_status()
-        result = response.json()
-        
-        print("测试结果:")
-        print(f"回答: {result.get('answer', '无回答')}")
-        print(f"来源数量: {len(result.get('sources', []))}")
-        
-        if result.get('sources'):
-            print("参考资料:")
-            for i, source in enumerate(result['sources']):
-                print(f"{i+1}. {source.get('source', '未知来源')}: {source.get('content', '无内容')[:100]}...")
-        
-    except Exception as e:
-        print(f"测试失败: {str(e)}")
+# 测试查询
+if len(sys.argv) > 1:
+    query = sys.argv[1]
+else:
+    query = "发票怎么导入？"
+print(f"发送查询: {query}")
 
-if __name__ == "__main__":
-    test_query()
+# 发送POST请求
+response = requests.post(
+    "http://localhost:8000/api/query",
+    data={"text": query},
+    headers={"Content-Type": "application/x-www-form-urlencoded"}
+)
+
+# 打印响应
+print(f"响应状态码: {response.status_code}")
+print(f"响应内容: {response.json()}")
